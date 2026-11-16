@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- dark mode (follows the system) -->
+    <color name="bg">#121212</color>
+    <color name="card">#1E1E1E</color>
+    <color name="current">#2C2C2C</color>
+    <color name="line">#262626</color>
+    <color name="text">#ECECEC</color>
+    <color name="text2">#B4B4B4</color>
+    <color name="text3">#7C7C7C</color>
+    <color name="dial">#1E1E1E</color>
+    <color name="needle">#A0A0A0</color>
+    <color name="kaaba">#0A0A0A</color>
+    <color name="kaaba_edge">#7C7C7C</color>
+    <color name="highlight">#40FFFFFF</color>
+</resources>

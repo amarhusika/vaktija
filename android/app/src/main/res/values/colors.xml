@@ -8,4 +8,10 @@
     <color name="text">#212121</color>
     <color name="text2">#616161</color>
     <color name="text3">#9E9E9E</color>
+    <!-- qibla compass -->
+    <color name="dial">#FFFFFF</color>
+    <color name="needle">#5A5A5A</color>
+    <color name="kaaba">#1B1B1B</color>
+    <color name="kaaba_edge">#1B1B1B</color>
+    <color name="highlight">#33000000</color>
 </resources>

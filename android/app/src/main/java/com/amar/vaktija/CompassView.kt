@@ -25,13 +25,15 @@ class CompassView @JvmOverloads constructor(context: Context, attrs: AttributeSe
     private val cText = context.getColor(R.color.text)
     private val cText3 = context.getColor(R.color.text3)
 
-    private val dial = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+    private val dial = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = context.getColor(R.color.dial) }
     private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 2 * dp }
     private val tick = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = context.getColor(R.color.text3); strokeWidth = 1.2f * dp }
     private val major = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = cText; strokeWidth = 2 * dp; strokeCap = Paint.Cap.ROUND }
     private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER; textSize = 18 * dp; typeface = Typeface.DEFAULT_BOLD }
     private val needle = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val kaaba = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#1B1B1B") }
+    private val kaaba = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = context.getColor(R.color.kaaba) }
+    private val kaabaEdge = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = context.getColor(R.color.kaaba_edge); style = Paint.Style.STROKE; strokeWidth = 1.2f * dp }
+    private val cNeedle = context.getColor(R.color.needle)
     private val gold = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#BFA046") }
     private val center = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = context.getColor(R.color.bg) }
     private val marker = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -84,7 +86,7 @@ class CompassView @JvmOverloads constructor(context: Context, attrs: AttributeSe
             canvas.save()
             canvas.rotate(qibla, cx, cy)
             val len = r * 0.40f
-            needle.color = if (aligned) cText else Color.parseColor("#5A5A5A")
+            needle.color = if (aligned) cText else cNeedle
             path.reset()
             path.moveTo(cx, cy - len)
             path.lineTo(cx + 9 * dp, cy)
@@ -96,6 +98,7 @@ class CompassView @JvmOverloads constructor(context: Context, attrs: AttributeSe
             val ky = cy - len - 16 * dp
             rect.set(cx - ks, ky - ks, cx + ks, ky + ks)
             canvas.drawRoundRect(rect, 3 * dp, 3 * dp, kaaba)
+            canvas.drawRoundRect(rect, 3 * dp, 3 * dp, kaabaEdge)
             rect.set(cx - ks, ky - ks * 0.45f, cx + ks, ky - ks * 0.15f)
             canvas.drawRect(rect, gold)
             canvas.restore()
