@@ -1,4 +1,4 @@
-# Gradle / Kotlin
+# Android: Gradle / Kotlin
 .gradle/
 .kotlin/
 build/
@@ -20,4 +20,11 @@ local.properties
 *.keystore
 release/
 
+# Web
+node_modules/
+web/dist/
+*.log
+.env*
+
 .DS_Store
+Thumbs.db
