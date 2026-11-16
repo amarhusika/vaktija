@@ -1,0 +1,435 @@
+package com.amar.vaktija
+
+import android.content.Context
+import android.location.Address
+import android.location.Geocoder
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import java.time.ZoneId
+import java.util.Locale
+
+/**
+ * City search and place names through Android's built-in Geocoder (Google, no API key).
+ * Time zone: from the IANA zone1970.tab table – the zone of the city's country whose main city is nearest.
+ */
+object Places {
+
+    @Suppress("DEPRECATION")
+    private val LOCALE: Locale = Locale("bs", "BA")
+
+    fun available() = Geocoder.isPresent()
+
+    /** Calls back on the main thread with the results, or null if the search failed (e.g. no internet). */
+    fun search(ctx: Context, query: String, callback: (List<City>?) -> Unit) {
+        val main = Handler(Looper.getMainLooper())
+        fun deliver(list: List<Address>?) {
+            val cities = list?.mapNotNull(::toCity)?.distinctBy { it.name + "|" + it.country }
+            main.post { callback(cities) }
+        }
+        val g = Geocoder(ctx, LOCALE)
+        if (Build.VERSION.SDK_INT >= 33) {
+            g.getFromLocationName(query, 8, object : Geocoder.GeocodeListener {
+                override fun onGeocode(addresses: MutableList<Address>) = deliver(addresses)
+                override fun onError(errorMessage: String?) = deliver(null)
+            })
+        } else {
+            Thread {
+                val r = try {
+                    @Suppress("DEPRECATION")
+                    g.getFromLocationName(query, 8)
+                } catch (e: Exception) {
+                    null
+                }
+                deliver(r)
+            }.start()
+        }
+    }
+
+    /** Name of the place at a coordinate (e.g. "Ilidža"), or null offline. Main-thread callback. */
+    fun reverse(ctx: Context, lat: Double, lng: Double, callback: (String?) -> Unit) {
+        if (!available()) { callback(null); return }
+        val main = Handler(Looper.getMainLooper())
+        fun deliver(list: List<Address>?) {
+            val a = list?.firstOrNull()
+            val name = a?.let { it.locality ?: it.subAdminArea ?: it.adminArea }
+            main.post { callback(name) }
+        }
+        val g = Geocoder(ctx, LOCALE)
+        if (Build.VERSION.SDK_INT >= 33) {
+            g.getFromLocation(lat, lng, 1, object : Geocoder.GeocodeListener {
+                override fun onGeocode(addresses: MutableList<Address>) = deliver(addresses)
+                override fun onError(errorMessage: String?) = deliver(null)
+            })
+        } else {
+            Thread {
+                val r = try {
+                    @Suppress("DEPRECATION")
+                    g.getFromLocation(lat, lng, 1)
+                } catch (e: Exception) {
+                    null
+                }
+                deliver(r)
+            }.start()
+        }
+    }
+
+    /** Saves the phone's position now, then (online) replaces the name with the real place name. */
+    fun saveMyLocation(ctx: Context, lat: Double, lng: Double, done: () -> Unit) {
+        Prefs.setGps(ctx, lat, lng, null)
+        done()
+        reverse(ctx, lat, lng) { name ->
+            if (name != null && Prefs.usesGps(ctx)) {
+                Prefs.setGps(ctx, lat, lng, name)
+                done()
+            }
+        }
+    }
+
+    private fun toCity(a: Address): City? {
+        if (!a.hasLatitude() || !a.hasLongitude()) return null
+        val name = a.locality ?: a.subAdminArea ?: a.featureName ?: a.adminArea ?: return null
+        val region = listOfNotNull(a.adminArea?.takeIf { it != name }, a.countryName).joinToString(", ")
+        return City(name, region, a.latitude, a.longitude, zoneFor(a.countryCode, a.latitude, a.longitude))
+    }
+
+    private class Zone(val countries: List<String>, val lat: Double, val lng: Double, val id: String)
+
+    private val zones: List<Zone> by lazy {
+        ZONE_TABLE.lineSequence().mapNotNull { line ->
+            val p = line.split(';')
+            val id = p[3]
+            // skip zones this phone's time-zone database doesn't know yet
+            if (runCatching { ZoneId.of(id) }.isFailure) null
+            else Zone(p[0].split(','), p[1].toDouble(), p[2].toDouble(), id)
+        }.toList()
+    }
+
+    /** Zone of [countryCode] whose main city is nearest; if the country is unknown, the nearest zone at all. */
+    fun zoneFor(countryCode: String?, lat: Double, lng: Double): String {
+        val cc = countryCode?.uppercase()
+        if (cc == "XK") return "Europe/Belgrade"            // Kosovo is not in zone1970.tab
+        val inCountry = zones.filter { cc != null && cc in it.countries }
+        if (inCountry.isEmpty() && cc != null) {
+            // ask Android's own time-zone database before guessing by distance
+            val ids = runCatching { android.icu.util.TimeZone.getAvailableIDs(cc).filter { "/" in it } }.getOrNull().orEmpty()
+            ids.firstOrNull { id -> runCatching { ZoneId.of(id) }.isSuccess }?.let { return it }
+        }
+        val pool = inCountry.ifEmpty { zones }
+        return pool.minByOrNull { Loc.distanceKm(lat, lng, it.lat, it.lng) }?.id ?: ZoneId.systemDefault().id
+    }
+
+    /** From tzdata zone1970.tab: countries;lat;lng;zone */
+    private const val ZONE_TABLE = """AD;42.50;1.52;Europe/Andorra
+AE,OM,RE,SC,TF;25.30;55.30;Asia/Dubai
+AF;34.52;69.20;Asia/Kabul
+AL;41.33;19.83;Europe/Tirane
+AM;40.18;44.50;Asia/Yerevan
+AQ;-66.28;110.52;Antarctica/Casey
+AQ;-68.58;77.97;Antarctica/Davis
+AQ;-67.60;62.88;Antarctica/Mawson
+AQ;-64.80;-64.10;Antarctica/Palmer
+AQ;-67.57;-68.13;Antarctica/Rothera
+AQ;-72.01;2.53;Antarctica/Troll
+AQ;-78.40;106.90;Antarctica/Vostok
+AR;-34.60;-58.45;America/Argentina/Buenos_Aires
+AR;-31.40;-64.18;America/Argentina/Cordoba
+AR;-24.78;-65.42;America/Argentina/Salta
+AR;-24.18;-65.30;America/Argentina/Jujuy
+AR;-26.82;-65.22;America/Argentina/Tucuman
+AR;-28.47;-65.78;America/Argentina/Catamarca
+AR;-29.43;-66.85;America/Argentina/La_Rioja
+AR;-31.53;-68.52;America/Argentina/San_Juan
+AR;-32.88;-68.82;America/Argentina/Mendoza
+AR;-33.32;-66.35;America/Argentina/San_Luis
+AR;-51.63;-69.22;America/Argentina/Rio_Gallegos
+AR;-54.80;-68.30;America/Argentina/Ushuaia
+AS,UM;-14.27;-170.70;Pacific/Pago_Pago
+AT;48.22;16.33;Europe/Vienna
+AU;-31.55;159.08;Australia/Lord_Howe
+AU;-54.50;158.95;Antarctica/Macquarie
+AU;-42.88;147.32;Australia/Hobart
+AU;-37.82;144.97;Australia/Melbourne
+AU;-33.87;151.22;Australia/Sydney
+AU;-31.95;141.45;Australia/Broken_Hill
+AU;-27.47;153.03;Australia/Brisbane
+AU;-20.27;149.00;Australia/Lindeman
+AU;-34.92;138.58;Australia/Adelaide
+AU;-12.47;130.83;Australia/Darwin
+AU;-31.95;115.85;Australia/Perth
+AU;-31.72;128.87;Australia/Eucla
+AZ;40.38;49.85;Asia/Baku
+BB;13.10;-59.62;America/Barbados
+BD;23.72;90.42;Asia/Dhaka
+BE,LU,NL;50.83;4.33;Europe/Brussels
+BG;42.68;23.32;Europe/Sofia
+BM;32.28;-64.77;Atlantic/Bermuda
+BO;-16.50;-68.15;America/La_Paz
+BR;-3.85;-32.42;America/Noronha
+BR;-1.45;-48.48;America/Belem
+BR;-3.72;-38.50;America/Fortaleza
+BR;-8.05;-34.90;America/Recife
+BR;-7.20;-48.20;America/Araguaina
+BR;-9.67;-35.72;America/Maceio
+BR;-12.98;-38.52;America/Bahia
+BR;-23.53;-46.62;America/Sao_Paulo
+BR;-20.45;-54.62;America/Campo_Grande
+BR;-15.58;-56.08;America/Cuiaba
+BR;-2.43;-54.87;America/Santarem
+BR;-8.77;-63.90;America/Porto_Velho
+BR;2.82;-60.67;America/Boa_Vista
+BR;-3.13;-60.02;America/Manaus
+BR;-6.67;-69.87;America/Eirunepe
+BR;-9.97;-67.80;America/Rio_Branco
+BT;27.47;89.65;Asia/Thimphu
+BY;53.90;27.57;Europe/Minsk
+BZ;17.50;-88.20;America/Belize
+CA;47.57;-52.72;America/St_Johns
+CA;44.65;-63.60;America/Halifax
+CA;46.20;-59.95;America/Glace_Bay
+CA;46.10;-64.78;America/Moncton
+CA;53.33;-60.42;America/Goose_Bay
+CA,BS;43.65;-79.38;America/Toronto
+CA;63.73;-68.47;America/Iqaluit
+CA;49.88;-97.15;America/Winnipeg
+CA;74.70;-94.83;America/Resolute
+CA;62.82;-92.08;America/Rankin_Inlet
+CA;50.40;-104.65;America/Regina
+CA;50.28;-107.83;America/Swift_Current
+CA;53.55;-113.47;America/Edmonton
+CA;69.11;-105.05;America/Cambridge_Bay
+CA;68.35;-133.72;America/Inuvik
+CA;49.27;-123.12;America/Vancouver
+CA;55.77;-120.23;America/Dawson_Creek
+CA;58.80;-122.70;America/Fort_Nelson
+CA;60.72;-135.05;America/Whitehorse
+CA;64.07;-139.42;America/Dawson
+CH,DE,LI;47.38;8.53;Europe/Zurich
+CI,BF,GH,GM,GN,IS,ML,MR,SH,SL,SN,TG;5.32;-4.03;Africa/Abidjan
+CK;-21.23;-159.77;Pacific/Rarotonga
+CL;-33.45;-70.67;America/Santiago
+CL;-45.57;-72.07;America/Coyhaique
+CL;-53.15;-70.92;America/Punta_Arenas
+CL;-27.15;-109.43;Pacific/Easter
+CN;31.23;121.47;Asia/Shanghai
+CN;43.80;87.58;Asia/Urumqi
+CO;4.60;-74.08;America/Bogota
+CR;9.93;-84.08;America/Costa_Rica
+CU;23.13;-82.37;America/Havana
+CV;14.92;-23.52;Atlantic/Cape_Verde
+CY;35.17;33.37;Asia/Nicosia
+CY;35.12;33.95;Asia/Famagusta
+CZ,SK;50.08;14.43;Europe/Prague
+DE,DK,NO,SE,SJ;52.50;13.37;Europe/Berlin
+DO;18.47;-69.90;America/Santo_Domingo
+DZ;36.78;3.05;Africa/Algiers
+EC;-2.17;-79.83;America/Guayaquil
+EC;-0.90;-89.60;Pacific/Galapagos
+EE;59.42;24.75;Europe/Tallinn
+EG;30.05;31.25;Africa/Cairo
+EH;27.15;-13.20;Africa/El_Aaiun
+ES;40.40;-3.68;Europe/Madrid
+ES;35.88;-5.32;Africa/Ceuta
+ES;28.10;-15.40;Atlantic/Canary
+FI,AX;60.17;24.97;Europe/Helsinki
+FJ;-18.13;178.42;Pacific/Fiji
+FK;-51.70;-57.85;Atlantic/Stanley
+FM;5.32;162.98;Pacific/Kosrae
+FO;62.02;-6.77;Atlantic/Faroe
+FR,MC;48.87;2.33;Europe/Paris
+GB,GG,IM,JE;51.51;-0.13;Europe/London
+GE;41.72;44.82;Asia/Tbilisi
+GF;4.93;-52.33;America/Cayenne
+GI;36.13;-5.35;Europe/Gibraltar
+GL;64.18;-51.73;America/Nuuk
+GL;76.77;-18.67;America/Danmarkshavn
+GL;70.48;-21.97;America/Scoresbysund
+GL;76.57;-68.78;America/Thule
+GR;37.97;23.72;Europe/Athens
+GS;-54.27;-36.53;Atlantic/South_Georgia
+GT;14.63;-90.52;America/Guatemala
+GU,MP;13.47;144.75;Pacific/Guam
+GW;11.85;-15.58;Africa/Bissau
+GY;6.80;-58.17;America/Guyana
+HK;22.28;114.15;Asia/Hong_Kong
+HN;14.10;-87.22;America/Tegucigalpa
+HT;18.53;-72.33;America/Port-au-Prince
+HU;47.50;19.08;Europe/Budapest
+ID;-6.17;106.80;Asia/Jakarta
+ID;-0.03;109.33;Asia/Pontianak
+ID;-5.12;119.40;Asia/Makassar
+ID;-2.53;140.70;Asia/Jayapura
+IE;53.33;-6.25;Europe/Dublin
+IL;31.78;35.22;Asia/Jerusalem
+IN;22.53;88.37;Asia/Kolkata
+IO;-7.33;72.42;Indian/Chagos
+IQ;33.35;44.42;Asia/Baghdad
+IR;35.67;51.43;Asia/Tehran
+IT,SM,VA;41.90;12.48;Europe/Rome
+JM;17.97;-76.79;America/Jamaica
+JO;31.95;35.93;Asia/Amman
+JP,AU;35.65;139.74;Asia/Tokyo
+KE,DJ,ER,ET,KM,MG,SO,TZ,UG,YT;-1.28;36.82;Africa/Nairobi
+KG;42.90;74.60;Asia/Bishkek
+KI,MH,TV,UM,WF;1.42;173.00;Pacific/Tarawa
+KI;-2.78;-171.72;Pacific/Kanton
+KI;1.87;-157.33;Pacific/Kiritimati
+KP;39.02;125.75;Asia/Pyongyang
+KR;37.55;126.97;Asia/Seoul
+KZ;43.25;76.95;Asia/Almaty
+KZ;44.80;65.47;Asia/Qyzylorda
+KZ;53.20;63.62;Asia/Qostanay
+KZ;50.28;57.17;Asia/Aqtobe
+KZ;44.52;50.27;Asia/Aqtau
+KZ;47.12;51.93;Asia/Atyrau
+KZ;51.22;51.35;Asia/Oral
+LB;33.88;35.50;Asia/Beirut
+LK;6.93;79.85;Asia/Colombo
+LR;6.30;-10.78;Africa/Monrovia
+LT;54.68;25.32;Europe/Vilnius
+LV;56.95;24.10;Europe/Riga
+LY;32.90;13.18;Africa/Tripoli
+MA;33.65;-7.58;Africa/Casablanca
+MD;47.00;28.83;Europe/Chisinau
+MH;9.08;167.33;Pacific/Kwajalein
+MM,CC;16.78;96.17;Asia/Yangon
+MN;47.92;106.88;Asia/Ulaanbaatar
+MN;48.02;91.65;Asia/Hovd
+MO;22.20;113.54;Asia/Macau
+MQ;14.60;-61.08;America/Martinique
+MT;35.90;14.52;Europe/Malta
+MU;-20.17;57.50;Indian/Mauritius
+MV,TF;4.17;73.50;Indian/Maldives
+MX;19.40;-99.15;America/Mexico_City
+MX;21.08;-86.77;America/Cancun
+MX;20.97;-89.62;America/Merida
+MX;25.67;-100.32;America/Monterrey
+MX;25.83;-97.50;America/Matamoros
+MX;28.63;-106.08;America/Chihuahua
+MX;31.73;-106.48;America/Ciudad_Juarez
+MX;29.57;-104.42;America/Ojinaga
+MX;23.22;-106.42;America/Mazatlan
+MX;20.80;-105.25;America/Bahia_Banderas
+MX;29.07;-110.97;America/Hermosillo
+MX;32.53;-117.02;America/Tijuana
+MY,BN;1.55;110.33;Asia/Kuching
+MZ,BI,BW,CD,MW,RW,ZM,ZW;-25.97;32.58;Africa/Maputo
+NA;-22.57;17.10;Africa/Windhoek
+NC;-22.27;166.45;Pacific/Noumea
+NF;-29.05;167.97;Pacific/Norfolk
+NG,AO,BJ,CD,CF,CG,CM,GA,GQ,NE;6.45;3.40;Africa/Lagos
+NI;12.15;-86.28;America/Managua
+NP;27.72;85.32;Asia/Kathmandu
+NR;-0.52;166.92;Pacific/Nauru
+NU;-19.02;-169.92;Pacific/Niue
+NZ,AQ;-36.87;174.77;Pacific/Auckland
+NZ;-43.95;-176.55;Pacific/Chatham
+PA,CA,KY;8.97;-79.53;America/Panama
+PE;-12.05;-77.05;America/Lima
+PF;-17.53;-149.57;Pacific/Tahiti
+PF;-9.00;-139.50;Pacific/Marquesas
+PF;-23.13;-134.95;Pacific/Gambier
+PG,AQ,FM;-9.50;147.17;Pacific/Port_Moresby
+PG;-6.22;155.57;Pacific/Bougainville
+PH;14.59;120.97;Asia/Manila
+PK;24.87;67.05;Asia/Karachi
+PL;52.25;21.00;Europe/Warsaw
+PM;47.05;-56.33;America/Miquelon
+PN;-25.07;-130.08;Pacific/Pitcairn
+PR,AG,CA,AI,AW,BL,BQ,CW,DM,GD,GP,KN,LC,MF,MS,SX,TT,VC,VG,VI;18.47;-66.11;America/Puerto_Rico
+PS;31.50;34.47;Asia/Gaza
+PS;31.53;35.09;Asia/Hebron
+PT;38.72;-9.13;Europe/Lisbon
+PT;32.63;-16.90;Atlantic/Madeira
+PT;37.73;-25.67;Atlantic/Azores
+PW;7.33;134.48;Pacific/Palau
+PY;-25.27;-57.67;America/Asuncion
+QA,BH;25.28;51.53;Asia/Qatar
+RO;44.43;26.10;Europe/Bucharest
+RS,BA,HR,ME,MK,SI;44.83;20.50;Europe/Belgrade
+RU;54.72;20.50;Europe/Kaliningrad
+RU;55.76;37.62;Europe/Moscow
+RU,UA;44.95;34.10;Europe/Simferopol
+RU;58.60;49.65;Europe/Kirov
+RU;48.73;44.42;Europe/Volgograd
+RU;46.35;48.05;Europe/Astrakhan
+RU;51.57;46.03;Europe/Saratov
+RU;54.33;48.40;Europe/Ulyanovsk
+RU;53.20;50.15;Europe/Samara
+RU;56.85;60.60;Asia/Yekaterinburg
+RU;55.00;73.40;Asia/Omsk
+RU;55.03;82.92;Asia/Novosibirsk
+RU;53.37;83.75;Asia/Barnaul
+RU;56.50;84.97;Asia/Tomsk
+RU;53.75;87.12;Asia/Novokuznetsk
+RU;56.02;92.83;Asia/Krasnoyarsk
+RU;52.27;104.33;Asia/Irkutsk
+RU;52.05;113.47;Asia/Chita
+RU;62.00;129.67;Asia/Yakutsk
+RU;62.66;135.55;Asia/Khandyga
+RU;43.17;131.93;Asia/Vladivostok
+RU;64.56;143.23;Asia/Ust-Nera
+RU;59.57;150.80;Asia/Magadan
+RU;46.97;142.70;Asia/Sakhalin
+RU;67.47;153.72;Asia/Srednekolymsk
+RU;53.02;158.65;Asia/Kamchatka
+RU;64.75;177.48;Asia/Anadyr
+SA,AQ,KW,YE;24.63;46.72;Asia/Riyadh
+SB,FM;-9.53;160.20;Pacific/Guadalcanal
+SD;15.60;32.53;Africa/Khartoum
+SG,AQ,MY;1.28;103.85;Asia/Singapore
+SR;5.83;-55.17;America/Paramaribo
+SS;4.85;31.62;Africa/Juba
+ST;0.33;6.73;Africa/Sao_Tome
+SV;13.70;-89.20;America/El_Salvador
+SY;33.50;36.30;Asia/Damascus
+TC;21.47;-71.13;America/Grand_Turk
+TD;12.12;15.05;Africa/Ndjamena
+TH,CX,KH,LA,VN;13.75;100.52;Asia/Bangkok
+TJ;38.58;68.80;Asia/Dushanbe
+TK;-9.37;-171.23;Pacific/Fakaofo
+TL;-8.55;125.58;Asia/Dili
+TM;37.95;58.38;Asia/Ashgabat
+TN;36.80;10.18;Africa/Tunis
+TO;-21.13;-175.20;Pacific/Tongatapu
+TR;41.02;28.97;Europe/Istanbul
+TW;25.05;121.50;Asia/Taipei
+UA;50.43;30.52;Europe/Kyiv
+US;40.71;-74.01;America/New_York
+US;42.33;-83.05;America/Detroit
+US;38.25;-85.76;America/Kentucky/Louisville
+US;36.83;-84.85;America/Kentucky/Monticello
+US;39.77;-86.16;America/Indiana/Indianapolis
+US;38.68;-87.53;America/Indiana/Vincennes
+US;41.05;-86.60;America/Indiana/Winamac
+US;38.38;-86.34;America/Indiana/Marengo
+US;38.49;-87.28;America/Indiana/Petersburg
+US;38.75;-85.07;America/Indiana/Vevay
+US;41.85;-87.65;America/Chicago
+US;37.95;-86.76;America/Indiana/Tell_City
+US;41.30;-86.62;America/Indiana/Knox
+US;45.11;-87.61;America/Menominee
+US;47.12;-101.30;America/North_Dakota/Center
+US;46.84;-101.41;America/North_Dakota/New_Salem
+US;47.26;-101.78;America/North_Dakota/Beulah
+US;39.74;-104.98;America/Denver
+US;43.61;-116.20;America/Boise
+US,CA;33.45;-112.07;America/Phoenix
+US;34.05;-118.24;America/Los_Angeles
+US;61.22;-149.90;America/Anchorage
+US;58.30;-134.42;America/Juneau
+US;57.18;-135.30;America/Sitka
+US;55.13;-131.58;America/Metlakatla
+US;59.55;-139.73;America/Yakutat
+US;64.50;-165.41;America/Nome
+US;51.88;-176.66;America/Adak
+US;21.31;-157.86;Pacific/Honolulu
+UY;-34.91;-56.21;America/Montevideo
+UZ;39.67;66.80;Asia/Samarkand
+UZ;41.33;69.30;Asia/Tashkent
+VE;10.50;-66.93;America/Caracas
+VN;10.75;106.67;Asia/Ho_Chi_Minh
+VU;-17.67;168.42;Pacific/Efate
+WS;-13.83;-171.73;Pacific/Apia
+ZA,LS,SZ;-26.25;28.00;Africa/Johannesburg"""
+}
